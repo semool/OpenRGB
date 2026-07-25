@@ -70,6 +70,7 @@ device_info RoccatVulcanKeyboardController::InitDeviceInfo()
         case ROCCAT_VULCAN_TKL_PRO_PID:
         case ROCCAT_VULCAN_II_PID:
         case ROCCAT_VULCAN_II_MAX_PID:
+        case TURTLE_BEACH_VULCAN_II_MAX_PID:
         case TURTLE_BEACH_VULCAN_II_PID:
         case TURTLE_BEACH_VULCAN_II_TKL_PRO_PID:
             packet_length = 9;
@@ -153,6 +154,7 @@ void RoccatVulcanKeyboardController::EnableDirect(bool on_off_switch)
         case ROCCAT_VULCAN_TKL_PRO_PID:
         case ROCCAT_VULCAN_II_PID:
         case ROCCAT_VULCAN_II_MAX_PID:
+        case TURTLE_BEACH_VULCAN_II_MAX_PID:
         case TURTLE_BEACH_VULCAN_II_PID:
         case TURTLE_BEACH_VULCAN_II_TKL_PRO_PID:
             buf = new uint8_t[5] { 0x0E, 0x05, on_off_switch, 0x00, 0x00 };
@@ -197,6 +199,11 @@ void RoccatVulcanKeyboardController::SendColors(std::vector<led_color> colors)
         protocol_version = 2;
         break;
     case ROCCAT_VULCAN_II_MAX_PID:
+        packet_length = 567;
+        column_length = 1;
+        protocol_version = 2;
+        break;
+    case TURTLE_BEACH_VULCAN_II_MAX_PID:
         packet_length = 567;
         column_length = 1;
         protocol_version = 2;
@@ -383,6 +390,11 @@ void RoccatVulcanKeyboardController::SendMode(unsigned int mode, unsigned int sp
             column_length = 1;
             break;
         case ROCCAT_VULCAN_II_MAX_PID:
+            protocol_version = 2;
+            packet_length = 542;
+            column_length = 1;
+            break;
+        case TURTLE_BEACH_VULCAN_II_MAX_PID:
             protocol_version = 2;
             packet_length = 542;
             column_length = 1;
