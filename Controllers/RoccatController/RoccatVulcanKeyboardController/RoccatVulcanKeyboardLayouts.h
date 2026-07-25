@@ -1056,10 +1056,10 @@ static std::map<int, layout_info> RoccatVulcanIIMaxLayouts =
             24,
             {
                 { KEY_EN_ESCAPE,              0x02 },
-                { KEY_EN_BACK_TICK,           0x03 },
+                { KEY_NORD_DOTS_CARET,        0x03 },
                 { KEY_EN_TAB,                 0x04 },
                 { KEY_EN_CAPS_LOCK,           0x05 },
-                { "Key: < > (ISO)",           0x06 },
+                { KEY_NORD_ANGLE_BRACKET,     0x06 },
                 { KEY_EN_LEFT_SHIFT,          0x00 },
                 { KEY_EN_LEFT_CONTROL,        0x01 },
 
@@ -1126,19 +1126,19 @@ static std::map<int, layout_info> RoccatVulcanIIMaxLayouts =
                 { KEY_DE_ESZETT,              0x42 },
                 { KEY_EN_P,                   0x2A },
                 { KEY_DE_DIAERESIS_O,         0x3E },
-                { KEY_EN_FORWARD_SLASH,       0x3F },
+                { KEY_EN_MINUS,               0x3F },
                 { KEY_EN_RIGHT_FUNCTION,      0x40 },
 
                 { KEY_EN_F10,                 0x47 },
-                { KEY_EN_EQUALS,              0x48 },
+                { KEY_NORD_ACUTE_GRAVE,       0x48 },
                 { KEY_DE_DIAERESIS_U,         0x43 },
                 { KEY_DE_DIAERESIS_A,         0x44 },
                 { KEY_EN_MENU,                0x46 },
 
                 { KEY_EN_F11,                 0x4D },
                 { KEY_EN_BACKSPACE,           0x50 },
-                { KEY_EN_RIGHT_BRACKET,       0x49 },
-                { "Key: Hash (ISO)",          0x4A },
+                { KEY_EN_PLUS,                0x49 },
+                { KEY_EN_POUND,               0x4A },
                 { KEY_EN_RIGHT_SHIFT,         0x4B },
 
                 { KEY_EN_F12,                 0x4F },
