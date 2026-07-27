@@ -826,14 +826,17 @@ static unsigned int ROCCAT_VULCAN_II_MAX_LAYOUT_KEYS_JIS[6][24] =
     {   5,  NA,  12,  18,  24,  NA,  34,  NA,  NA,  50,  56,  62,  68,  NA,  77,  NA,  81,  86,  90,  NA,  95,  NA, 104,  NA }
 };
 
-static unsigned int ROCCAT_VULCAN_II_MAX_LAYOUT_KEYS_ISO_DE[6][24] =
+static unsigned int ROCCAT_VULCAN_II_MAX_LAYOUT_KEYS_ISO_DE[9][24] =
 {
+    {  NA,  NA, 108, 109, 110, 111,  NA, 112, 113, 114, 115, 116, 117, 118, 119,  NA, 120, 121, 122,  NA,  NA,  NA,  NA,  NA },
     {   0,  NA,   9,  15,  20,  25,  NA,  35,  40,  45,  50,  56,  62,  67,  72,  NA,  75,  79,  84,  NA, 105, 106, 107,  NA },
     {   1,   7,  10,  16,  21,  26,  30,  36,  41,  46,  51,  57,  63,  68,  NA,  NA,  76,  80,  85,  NA,  88,  93,  97, 102 },
+    {  NA,  NA,  NA,  NA,  NA,  NA,  NA,  NA,  NA,  NA,  NA,  NA,  NA,  NA,  NA,  NA, 123, 124, 125,  NA, 129,  NA,  NA,  NA },
     {   2,  NA,  11,  17,  22,  27,  31,  13,  42,  47,  52,  58,  64,  69,  73,  NA,  77,  81,  86,  NA,  89,  94,  98, 103 },
-    {   3,  NA,  12,  18,  23,  28,  32,  38,  43,  48,  53,  59,  65,  70,  NA,  NA,  NA,  NA,  NA,  NA,  90,  95,  99,  NA },
+    {   3, 130,  12,  18,  23,  28,  32,  38,  43,  48,  53,  59,  65,  70,  NA,  NA, 126, 127, 128,  NA,  90,  95,  99,  NA },
     {   5,   4,  37,  19,  24,  29,  33,  39,  44,  NA,  49,  54,  60,  71,  NA,  NA,  NA,  82,  NA,  NA,  91,  96, 100, 104 },
-    {   6,   8,  14,  NA,  NA,  NA,  34,  NA,  NA,  NA,  55,  61,  66,  74,  NA,  NA,  78,  83,  87,  NA,  92,  NA, 101,  NA }
+    {   6,   8,  14,  NA,  NA,  NA,  34,  NA,  NA,  NA,  55,  61,  66,  74,  NA,  NA,  78,  83,  87,  NA,  92,  NA, 101,  NA },
+    {  NA, 131,  NA,  NA, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147,  NA,  NA,  NA,  NA }
 };
 
 static std::map<int, layout_info> RoccatVulcanIIMaxLayouts =
@@ -1052,7 +1055,7 @@ static std::map<int, layout_info> RoccatVulcanIIMaxLayouts =
         {
             *ROCCAT_VULCAN_II_MAX_LAYOUT_KEYS_ISO_DE,
             148,
-            6,
+            9,
             24,
             {
                 { KEY_EN_ESCAPE,              0x02 },
@@ -1211,18 +1214,14 @@ static std::map<int, layout_info> RoccatVulcanIIMaxLayouts =
                 { "Key: Insert LED 2",        0x75 },
                 { "Key: Home LED 2",          0x7E },
                 { "Key: Page Up LED 2",       0x84 },
+                { "Key: Delete LED 2",        0x78 },
+                { "Key: End LED 2",           0x90 },
+                { "Key: Page Down LED 2",     0x8A },
 
                 /*-------------------------------------------------------------*\
                 |  Num Lock Indicator (secondary LED)                           |
                 \*-------------------------------------------------------------*/
                 { "Key: Num Lock LED 2",      0x8B },
-
-                /*-------------------------------------------------------------*\
-                |  Nav Cluster Indicators 2 (secondary LEDs)                    |
-                \*-------------------------------------------------------------*/
-                { "Key: Delete LED 2",        0x78 },
-                { "Key: End LED 2",           0x90 },
-                { "Key: Page Down LED 2",     0x8A },
 
                 /*-------------------------------------------------------------*\
                 |  Caps Lock Indicator (secondary LED)                          |

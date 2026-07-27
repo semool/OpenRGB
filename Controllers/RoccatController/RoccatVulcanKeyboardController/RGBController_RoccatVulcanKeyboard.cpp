@@ -173,7 +173,7 @@ void RGBController_RoccatVulcanKeyboard::SetupZones()
     \*---------------------------------------------------------*/
     int keyboard_size = keyboard[layout].size;
 
-    if(pid == ROCCAT_VULCAN_II_MAX_PID || pid == TURTLE_BEACH_VULCAN_II_MAX_PID)
+    if(pid == ROCCAT_VULCAN_II_MAX_PID || pid == TURTLE_BEACH_VULCAN_II_MAX_PID && layout != ROCCAT_VULCAN_LAYOUT_DE)
     {
         /*---------------------------------------------------------*\
         | Dynamically calculate the main keyboard zone size by      |
@@ -193,7 +193,7 @@ void RGBController_RoccatVulcanKeyboard::SetupZones()
     keyboard_zone.matrix_map.Set(keyboard[layout].rows, keyboard[layout].cols, keyboard[layout].matrix_map);
     zones.push_back(keyboard_zone);
 
-    if(pid == ROCCAT_VULCAN_II_MAX_PID || pid == TURTLE_BEACH_VULCAN_II_MAX_PID)
+    if(pid == ROCCAT_VULCAN_II_MAX_PID || pid == TURTLE_BEACH_VULCAN_II_MAX_PID && layout != ROCCAT_VULCAN_LAYOUT_DE)
     {
         zone fkey_ind_zone;
         fkey_ind_zone.name               = "F-Key Indicators";
