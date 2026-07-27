@@ -173,7 +173,10 @@ void RGBController_RoccatVulcanKeyboard::SetupZones()
     \*---------------------------------------------------------*/
     int keyboard_size = keyboard[layout].size;
 
-    if(pid == ROCCAT_VULCAN_II_MAX_PID || pid == TURTLE_BEACH_VULCAN_II_MAX_PID && layout != ROCCAT_VULCAN_LAYOUT_DE)
+    /*---------------------------------------------------------*\
+    | Dont use this Hack on ROCCAT_VULCAN_LAYOUT_DE             |
+    \*---------------------------------------------------------*/
+    if(pid == ROCCAT_VULCAN_II_MAX_PID  && layout != ROCCAT_VULCAN_LAYOUT_DE || pid == TURTLE_BEACH_VULCAN_II_MAX_PID && layout != ROCCAT_VULCAN_LAYOUT_DE)
     {
         /*---------------------------------------------------------*\
         | Dynamically calculate the main keyboard zone size by      |
@@ -181,7 +184,6 @@ void RGBController_RoccatVulcanKeyboard::SetupZones()
         | total layout size. This prevents JIS keys from overflow.  |
         \*---------------------------------------------------------*/
         keyboard_size = keyboard[layout].size - 40;
-
     }
 
     zone keyboard_zone;
@@ -193,7 +195,12 @@ void RGBController_RoccatVulcanKeyboard::SetupZones()
     keyboard_zone.matrix_map.Set(keyboard[layout].rows, keyboard[layout].cols, keyboard[layout].matrix_map);
     zones.push_back(keyboard_zone);
 
-    if(pid == ROCCAT_VULCAN_II_MAX_PID || pid == TURTLE_BEACH_VULCAN_II_MAX_PID && layout != ROCCAT_VULCAN_LAYOUT_DE)
+    /*---------------------------------------------------------*\
+    | Dont use extra zones for ISO_DE Matrix                    |
+    | All Secondary and Palm Rest LEDs are integrated           |
+    | directly in the DE Matrix.                                |
+    \*---------------------------------------------------------*/
+    if(pid == ROCCAT_VULCAN_II_MAX_PID && layout != ROCCAT_VULCAN_LAYOUT_DE || pid == TURTLE_BEACH_VULCAN_II_MAX_PID && layout != ROCCAT_VULCAN_LAYOUT_DE)
     {
         zone fkey_ind_zone;
         fkey_ind_zone.name               = "F-Key Indicators";
