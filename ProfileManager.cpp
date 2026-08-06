@@ -789,6 +789,45 @@ bool ProfileManager::SaveProfileFromJSON(nlohmann::json profile_json)
     }
 }
 
+bool ProfileManager::SaveProfileFromPlugin(std::string profile_name, std::string plugin_name, nlohmann::json plugin_data)
+{
+    /*-----------------------------------------------------*\
+    | If a name was entered, save the profile file          |
+    \*-----------------------------------------------------*/
+    if(profile_name != "")
+    {
+        /*-------------------------------------------------*\
+        | Start filling in profile json data                |
+        \*-------------------------------------------------*/
+        nlohmann::json profile_json;
+
+        profile_json["profile_version"]         = OPENRGB_PROFILE_VERSION;
+        profile_json["profile_name"]            = profile_name;
+        profile_json["plugins"][plugin_name]    = plugin_data;
+
+        if(ResourceManager::get()->IsLocalClient() && (ResourceManager::get()->GetLocalClient()->GetSupportsProfileManagerAPI()))
+        {
+            /*---------------------------------------------*\
+            | Upload the profile to the server              |
+            \*---------------------------------------------*/
+            ResourceManager::get()->GetLocalClient()->ProfileManager_UploadProfile(profile_json.dump());
+        }
+        else
+        {
+            /*---------------------------------------------*\
+            | Save the profile to file from the JSON        |
+            \*---------------------------------------------*/
+            SaveProfileFromJSON(profile_json);
+        }
+
+        return(true);
+    }
+    else
+    {
+        return(false);
+    }
+}
+
 bool ProfileManager::SaveConfiguration()
 {
     /*-----------------------------------------------------*\
@@ -933,6 +972,39 @@ void ProfileManager::SetConfigurationDirectory(const filesystem::path& directory
 void ProfileManager::MigrateLegacyProfiles()
 {
     /*-----------------------------------------------------*\
+    | Migrate any controller configuration in sizes.ors     |
+    | that doesn't already exist in the manual              |
+    | configuration list                                    |
+    \*-----------------------------------------------------*/
+    std::vector<RGBController*> sizes_controllers;
+
+    sizes_controllers = GetControllerListFromLegacyProfile("sizes", true);
+
+    if(sizes_controllers.size() > 0)
+    {
+        for(std::size_t controller_idx = 0; controller_idx < sizes_controllers.size(); controller_idx++)
+        {
+            bool found = false;
+
+            for(std::size_t manually_configured_idx = 0; manually_configured_idx < manually_configured_rgb_controllers.size(); manually_configured_idx++)
+            {
+                if(RGBController::CompareControllers(sizes_controllers[controller_idx], manually_configured_rgb_controllers[manually_configured_idx]))
+                {
+                    found = true;
+                    break;
+                }
+            }
+
+            if(!found)
+            {
+                manually_configured_rgb_controllers.push_back(sizes_controllers[controller_idx]);
+            }
+        }
+
+        SaveConfiguration();
+    }
+
+    /*-----------------------------------------------------*\
     | Look at each file in the configuration directory for  |
     | files with .orp extension                             |
     \*-----------------------------------------------------*/
@@ -1042,7 +1114,9 @@ void ProfileManager::UpdateProfileList()
     if(ResourceManager::get()->IsLocalClient() && (ResourceManager::get()->GetLocalClient()->GetSupportsProfileManagerAPI()))
     {
         ResourceManager::get()->GetLocalClient()->ProfileManager_GetProfileList();
-        ResourceManager::get()->GetLocalClient()->ProfileManager_GetActiveProfile();
+        active_profile = ResourceManager::get()->GetLocalClient()->ProfileManager_GetActiveProfile();
+
+        SignalProfileManagerUpdate(PROFILEMANAGER_UPDATE_REASON_PROFILE_LIST_UPDATED);
     }
     else
     {

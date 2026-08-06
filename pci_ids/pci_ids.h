@@ -586,6 +586,7 @@
 #define KFA2_RTX_2080_SUPER_EX_OC_SUB_DEV                       0x13A1
 #define KFA2_RTX_2080TI_EX_OC_SUB_DEV                           0x1323
 #define GALAX_RTX_3080_SG_SUB_DEV                               0x1455
+#define GALAX_RTX_3070_1_CLICK_OC_SUB_DEV  			0x146B
 #define GALAX_RTX_5070TI_EX_OC_SUB_DEV                          0x205C
 
 /*-----------------------------------------------------*\
@@ -751,6 +752,7 @@
 #define GIGABYTE_AORUS_RX_6750_XT_ELITE_12G_SUB_DEV             0x2407
 #define GIGABYTE_RX6800XT_GAMING_OC_SUB_DEV                     0x2328
 #define GIGABYTE_RX6900XT_XTREME_WATERFORCE_WB_SUB_DEV          0x2333
+#define GIGABYTE_AORUS_RX6900XT_MASTER_SUB_DEV                  0x2332
 #define GIGABYTE_RX6900XT_GAMING_OC_SUB_DEV                     0x232C
 #define GIGABYTE_RX9060XT_GAMING_16G_SUB_DEV                    0x2434
 #define GIGABYTE_RX9060XT_GAMING_OC_16G_SUB_DEV                 0x2429
