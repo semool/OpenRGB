@@ -107,7 +107,8 @@ bool BasicHIDBlock::compare(hid_device_info* info)
 
 bool BasicHIDBlock::matching_id(hid_device_info* info)
 {
-    return((vid == info->vendor_id) && (pid == info->product_id));
+    return(((vid == info->vendor_id))
+        && ((pid == info->product_id) || (pid == HID_PID_ANY)));
 }
 
 /*---------------------------------------------------------*\
@@ -852,14 +853,14 @@ void DetectionManager::BackgroundDetectDevices()
     | Track if rules exist in any /etc location             |
     | Note: Flatpak mounts this at /run/host/etc            |
     \*-----------------------------------------------------*/
-    bool in_etc             = (access("/etc/udev/rules.d/60-openrgb.rules", F_OK) == 0) || 
+    bool in_etc             = (access("/etc/udev/rules.d/60-openrgb.rules", F_OK) == 0) ||
                               (access("/run/host/etc/udev/rules.d/60-openrgb.rules", F_OK) == 0);
 
     /*-----------------------------------------------------*\
     | Track if rules exist in any /usr/lib location         |
     | Note: Flatpak mounts this at /run/host/usr            |
     \*-----------------------------------------------------*/
-    bool in_usr_lib         = (access("/usr/lib/udev/rules.d/60-openrgb.rules", F_OK) == 0) || 
+    bool in_usr_lib         = (access("/usr/lib/udev/rules.d/60-openrgb.rules", F_OK) == 0) ||
                               (access("/run/host/usr/lib/udev/rules.d/60-openrgb.rules", F_OK) == 0);
 
     /*-----------------------------------------------------*\
@@ -1180,7 +1181,9 @@ void DetectionManager::BackgroundDetectHIDDevicesSafe(json& detector_settings)
 
         LOG_VERBOSE("[%s] Trying to run detector for [%s] (for %04x:%04x)", DETECTIONMANAGER, detector.name.c_str(), detector.vid, detector.pid);
 
-        hid_device_info* current_hid_device = hid_enumerate(detector.vid, detector.pid);
+        unsigned short enumerate_vid = (detector.vid == HID_VID_ANY) ? 0 : detector.vid;
+        unsigned short enumerate_pid = (detector.pid == HID_PID_ANY) ? 0 : detector.pid;
+        hid_device_info* current_hid_device = hid_enumerate(enumerate_vid, enumerate_pid);
 
         while(current_hid_device)
         {

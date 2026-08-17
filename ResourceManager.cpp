@@ -70,6 +70,7 @@ static void ResourceManagerDetectionCallback(void * this_ptr, unsigned int updat
             break;
 
         case DETECTIONMANAGER_UPDATE_REASON_DETECTION_COMPLETE:
+            this_obj->HandleDetectionComplete();
             this_obj->SignalResourceManagerUpdate(RESOURCEMANAGER_UPDATE_REASON_DETECTION_COMPLETE);
             break;
     }
@@ -118,7 +119,7 @@ static void ResourceManagerNetworkClientCallback(void* this_ptr, unsigned int up
         case NETWORKCLIENT_UPDATE_REASON_PROFILEMANAGER_ACTIVE_PROFILE_CHANGED:
             this_obj->GetProfileManager()->SignalProfileManagerUpdate(PROFILEMANAGER_UPDATE_REASON_ACTIVE_PROFILE_CHANGED);
             break;
-        
+
         case NETWORKCLIENT_UPDATE_REASON_SERVER_FLAGS_RECEIVED:
             if(this_obj->IsLocalClient())
             {
@@ -167,6 +168,7 @@ ResourceManager::ResourceManager()
     default_server_host         = "";
     default_server_port         = 0;
     detection_enabled           = true;
+    first_detection_complete    = false;
     init_finished               = false;
     plugin_manager              = NULL;
     server                      = NULL;
@@ -200,7 +202,7 @@ ResourceManager::ResourceManager()
     detection_settings_schema["initial_detection_delay_ms"]["type"]         = "integer";
     detection_settings_schema["initial_detection_delay_ms"]["description"]  = QT_TRANSLATE_NOOP("Settings", "Amount of time, in milliseconds, to wait before detecting devices when started");
 
-    settings_manager->RegisterSettingsSchema("Detectors", QT_TRANSLATE_NOOP("Settings", "Detection"), detection_settings_schema);
+    settings_manager->RegisterSettingsSchemaIgnoreFilter("Detectors", QT_TRANSLATE_NOOP("Settings", "Detection"), detection_settings_schema);
 
     /*-----------------------------------------------------*\
     | Create LogManager settings schema                     |
@@ -263,7 +265,7 @@ ResourceManager::ResourceManager()
     server_settings_schema["legacy_workaround"]["type"]                     = "bool";
     server_settings_schema["legacy_workaround"]["description"]              = QT_TRANSLATE_NOOP("Settings", "Workaround for some older SDK implementations that sent incorrect packet size for certain packets");
 
-    settings_manager->RegisterSettingsSchema("Server", QT_TRANSLATE_NOOP("Settings", "Server"), server_settings_schema);
+    settings_manager->RegisterSettingsSchemaLocalOnly("Server", QT_TRANSLATE_NOOP("Settings", "Server"), server_settings_schema);
 
     /*-----------------------------------------------------*\
     | Configure the log manager                             |
@@ -823,6 +825,19 @@ std::string ResourceManager::GetDetectionString()
     }
 }
 
+void ResourceManager::HandleDetectionComplete()
+{
+    if(!first_detection_complete)
+    {
+        if(start_server && !start_gui)
+        {
+            profile_manager->LoadAutoProfileServiceStartup();
+        }
+
+        first_detection_complete = true;
+    }
+}
+
 void ResourceManager::RescanDevices()
 {
     /*-----------------------------------------------------*\
@@ -1113,7 +1128,7 @@ bool ResourceManager::AttemptLocalConnection()
     return success;
 }
 
-void ResourceManager::Initialize(bool tryConnect, bool detectDevices, bool startServer, bool applyPostOptions)
+void ResourceManager::Initialize(bool tryConnect, bool detectDevices, bool startServer, bool applyPostOptions, bool startGui)
 {
     /*-----------------------------------------------------*\
     | Cache the parameters                                  |
@@ -1122,6 +1137,7 @@ void ResourceManager::Initialize(bool tryConnect, bool detectDevices, bool start
     tryAutoConnect                  = tryConnect && !startServer;
     detection_enabled               = detectDevices;
     start_server                    = startServer;
+    start_gui                       = startGui;
     apply_post_options              = applyPostOptions;
 
     /*-----------------------------------------------------*\
