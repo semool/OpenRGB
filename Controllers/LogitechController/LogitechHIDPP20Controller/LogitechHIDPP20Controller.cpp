@@ -42,6 +42,21 @@ static const int HIDPP20_READ_DRAIN_BUDGET = 64;
 static const int CENTURION_PROBE_PER_ADDR_TIMEOUT_MS = 5;
 
 /*---------------------------------------------------------*\
+| Consecutive CenturionFeatureSet batches that answer       |
+| nothing before the walk gives up. A wireless sub-device   |
+| can drop a frame; one that has gone away drops them all.  |
+\*---------------------------------------------------------*/
+static const int CENTURION_FEATURE_MISS_BUDGET = 3;
+
+/*---------------------------------------------------------*\
+| Feature entries in one CenturionFeatureSet reply. A 64    |
+| byte frame less the addressed header and the bridge       |
+| wrapper leaves 53 payload bytes: one count byte and 13    |
+| four byte entries.                                        |
+\*---------------------------------------------------------*/
+static const int CENTURION_FEATURES_PER_FRAME = 13;
+
+/*---------------------------------------------------------*\
 | Device-name helpers. A placeholder is empty or one of the |
 | HIDPP20_NAME_PLACEHOLDER_* strings. A name "looks real"   |
 | when it is non-empty, printable ASCII, and a sane length. |
@@ -150,7 +165,8 @@ LogitechHIDPP20Controller::LogitechHIDPP20Controller
     bool                        wireless,
     std::shared_ptr<std::mutex> mutex_ptr,
     uint16_t                    usage_page,
-    hid_device*                 perkey_vl_dev
+    hid_device*                 perkey_vl_dev,
+    bool                        bluetooth
     )
 {
     this->dev           = dev;
@@ -158,6 +174,7 @@ LogitechHIDPP20Controller::LogitechHIDPP20Controller
     this->location      = path;
     this->device_index  = device_index;
     this->wireless      = wireless;
+    this->transport.bluetooth = bluetooth;
     this->mutex         = mutex_ptr;
     this->long_only     = false;
 
@@ -182,6 +199,7 @@ LogitechHIDPP20Controller::LogitechHIDPP20Controller
     this->power_thread_running = false;
     this->pending_activity     = -1;
     this->pending_connection   = 0;
+    this->pending_power_check  = false;
     this->device_online        = true;
     this->consecutive_timeouts = 0;
     this->power_state          = HIDPP20_POWER_ACTIVE;
@@ -388,6 +406,58 @@ int LogitechHIDPP20Controller::ReadFromQueue
 }
 
 /*---------------------------------------------------------*\
+| An answer to a send that had already timed out arrives    |
+| after the retry has been answered. Nothing in an IRoot    |
+| reply says which feature it was asked about, so one left  |
+| in the pipe becomes the next request's answer and the     |
+| feature map takes a wrong index. Read them off before the |
+| next command goes out.                                    |
+\*---------------------------------------------------------*/
+void LogitechHIDPP20Controller::DrainLateAnswers(uint8_t feat_idx, uint8_t function, int expected)
+{
+    std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now()
+                                                   + std::chrono::milliseconds(HIDPP20_LATE_ANSWER_GRACE_MS);
+    int drained = 0;
+
+    while(drained < expected)
+    {
+        std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
+
+        if(now >= deadline)
+        {
+            break;
+        }
+
+        int remaining = (int)std::chrono::duration_cast<std::chrono::milliseconds>(
+                              deadline - now).count();
+
+        uint8_t resp_feat     = 0;
+        uint8_t resp_func     = 0;
+        uint8_t resp_data[60] = {};
+
+        int rd = ReadMessage(&resp_feat, &resp_func, resp_data, sizeof(resp_data), remaining);
+
+        if(rd <= 0)
+        {
+            break;
+        }
+
+        if(resp_feat == feat_idx
+        && (resp_func & 0xF0) == (function & 0xF0)
+        && (resp_func & 0x0F) == HIDPP20_SW_ID)
+        {
+            drained++;
+        }
+    }
+
+    if(drained > 0)
+    {
+        LOG_DEBUG("%s Discarded %d late answer(s) for feat=0x%02X func=0x%02X",
+                  LOG_TAG, drained, feat_idx, function);
+    }
+}
+
+/*---------------------------------------------------------*\
 | Sleep delay_ms in slices, waking early when the link is   |
 | about to change or the device went offline. Returns false |
 | when interrupted.                                         |
@@ -484,7 +554,9 @@ int LogitechHIDPP20Controller::SendAcked
     int     last_result = 0;
     uint8_t last_error  = 0;
 
-    for(uint8_t attempt = 0; attempt < policy.attempts; attempt++)
+    bool long_latch_retry = false;
+
+    for(int attempt = 0; attempt < (int)policy.attempts; attempt++)
     {
         /*-------------------------------------------------*\
         | Backoff before each attempt (0 on first).         |
@@ -517,6 +589,9 @@ int LogitechHIDPP20Controller::SendAcked
                       LOG_TAG, policy.name);
             return 0;
         }
+
+        const bool sent_short = (transport.type == HIDPP20_TRANSPORT_STANDARD)
+                             && PrefersShortFrame(send_len);
 
         int send_result = SendMessage(feat_idx, function, send_data, send_len);
 
@@ -677,6 +752,8 @@ int LogitechHIDPP20Controller::SendAcked
                     LOG_DEBUG("%s SendAcked[%s] succeeded on attempt %d "
                               "feat=0x%02X func=0x%02X",
                               LOG_TAG, policy.name, attempt, feat_idx, function);
+
+                    DrainLateAnswers(feat_idx, function, attempt);
                 }
 
                 consecutive_timeouts.store(0);
@@ -684,6 +761,32 @@ int LogitechHIDPP20Controller::SendAcked
             }
 
             /* Non-matching, non-error: stale unrelated frame, keep reading */
+        }
+
+        /*-------------------------------------------------*\
+        | A collection with no short report answers nothing |
+        | rather than rejecting the write: Linux hidraw     |
+        | takes the 0x10 frame and drops it. Silence to a   |
+        | short frame is the same evidence as a rejected    |
+        | write, so latch long and let the next attempt     |
+        | resend.                                           |
+        \*-------------------------------------------------*/
+        if(!need_resend && sent_short && !long_only.load())
+        {
+            LOG_DEBUG("%s Short report went unanswered, using long frames", LOG_TAG);
+            long_only.store(true);
+
+            /*---------------------------------------------*\
+            | The frame the device could not receive says   |
+            | nothing about whether it answers, so repeat   |
+            | this attempt as long rather than spend one on |
+            | the discovery. Once per call.                 |
+            \*---------------------------------------------*/
+            if(!long_latch_retry)
+            {
+                long_latch_retry = true;
+                attempt--;
+            }
         }
     }
 
@@ -787,6 +890,39 @@ int LogitechHIDPP20Controller::SendAckedIntoFAP
 \*---------------------------------------------------------*/
 
 /*---------------------------------------------------------*\
+| Budget for the first exchange with a node: wider for a    |
+| device a receiver already named and for a Bluetooth link, |
+| whose connection interval puts the first answer hundreds  |
+| of ms out. Everything else fails fast.                    |
+\*---------------------------------------------------------*/
+const HIDPP20RetryPolicy& LogitechHIDPP20Controller::FirstContactPolicy() const
+{
+    if(transport.bluetooth)
+    {
+        return HIDPP20_POLICY_BLUETOOTH;
+    }
+
+    return wireless ? HIDPP20_POLICY_FIRST_CONTACT
+                    : HIDPP20_POLICY_PROBE;
+}
+
+/*---------------------------------------------------------*\
+| Frame choice for standard HID++: short (0x10) carries 3   |
+| payload bytes, long (0x11) carries 16. Windows opens the  |
+| long-message collection only, and long_only latches a     |
+| collection that has no short report at all.               |
+\*---------------------------------------------------------*/
+bool LogitechHIDPP20Controller::PrefersShortFrame(size_t len) const
+{
+#if defined(_WIN32)
+    (void)len;
+    return false;
+#else
+    return (len <= 3) && !long_only.load();
+#endif
+}
+
+/*---------------------------------------------------------*\
 | Outgoing frame as hex, for trace-level wire comparison.   |
 \*---------------------------------------------------------*/
 static std::string hex_frame(const uint8_t* buf, size_t len)
@@ -829,11 +965,7 @@ int LogitechHIDPP20Controller::SendStandard
     uint8_t buf[LOGITECH_LONG_MESSAGE_LEN];
     size_t  msg_len;
 
-#if defined(_WIN32)
-    const bool prefer_short = false;
-#else
-    const bool prefer_short = (len <= 3) && !long_only.load();
-#endif
+    const bool prefer_short = PrefersShortFrame(len);
 
     if(prefer_short)
     {
@@ -1530,6 +1662,12 @@ uint8_t LogitechHIDPP20Controller::GetFeatureIndex(uint16_t feature_page,
         }
         else
         {
+            /*---------------------------------------------*\
+            | The device answered: absent is an answer,     |
+            | cache it.                                     |
+            \*---------------------------------------------*/
+            caps.feature_map[feature_page] = 0;
+
             LOG_DEBUG("%s Feature 0x%04X not present", LOG_TAG, feature_page);
         }
 
@@ -1537,11 +1675,10 @@ uint8_t LogitechHIDPP20Controller::GetFeatureIndex(uint16_t feature_page,
     }
 
     /*-----------------------------------------------------*\
-    | Cache misses too so failed lookups are not re-queried |
+    | No answer describes the link, not the feature: do not |
+    | cache it, or retries would answer from the map.       |
     \*-----------------------------------------------------*/
-    caps.feature_map[feature_page] = 0;
-
-    LOG_DEBUG("%s Feature 0x%04X not found", LOG_TAG, feature_page);
+    LOG_DEBUG("%s Feature 0x%04X did not answer", LOG_TAG, feature_page);
     return 0;
 }
 
@@ -2024,46 +2161,124 @@ void LogitechHIDPP20Controller::EnumerateFeatures(uint8_t feature_set_idx)
     if(transport.type == HIDPP20_TRANSPORT_CENTURION)
     {
         /*-------------------------------------------------*\
-        | Centurion sub-device: CenturionFeatureSet fn1     |
-        | returns ALL features in one bulk response.        |
-        | [count, (feat_hi, feat_lo, type, version) x N]    |
+        | Centurion sub-device: CenturionFeatureSet         |
+        | GetCount (fn0) for the total, then GetFeatureId   |
+        | (fn1), which answers [remaining, (feat_hi,        |
+        | feat_lo, type, version) x N] listing from the     |
+        | requested index.                                  |
         \*-------------------------------------------------*/
-        uint8_t send_data[1] = { 0x00 };
-        uint8_t recv_data[60] = {};
+        uint8_t count_resp[16] = {};
 
-        int result = SendAcked(feature_set_idx, 0x10,
-                               send_data, 1, recv_data, sizeof(recv_data));
+        int result = SendAcked(feature_set_idx, FN_0001_GET_COUNT,
+                               nullptr, 0, count_resp, sizeof(count_resp));
 
-        if(result > 0)
+        if(result <= 0)
         {
-            uint8_t count = recv_data[0];
+            return;
+        }
 
-            LOG_DEBUG("%s CenturionFeatureSet: %d features", LOG_TAG, count);
+        uint8_t      count    = count_resp[0];
+        unsigned int resolved = 0;
+        unsigned int misses   = 0;
+        uint8_t      next     = 0;
 
-            for(uint8_t i = 0; i < count && (1 + i * 4 + 3) < (int)sizeof(recv_data); i++)
+        LOG_DEBUG("%s CenturionFeatureSet: %u features", LOG_TAG, count);
+
+        while(next < count)
+        {
+            uint8_t send_idx      = next;
+            uint8_t recv_data[60] = {};
+
+            /*---------------------------------------------*\
+            | Probe policy: the device has just answered    |
+            | GetCount, so a batch that goes quiet means it |
+            | left. Reliable retries per batch would stall  |
+            | detection for minutes.                        |
+            \*---------------------------------------------*/
+            int batch_result = SendAcked(feature_set_idx, FN_0001_GET_FEATURE_ID,
+                                         &send_idx, 1, recv_data, sizeof(recv_data),
+                                         HIDPP20_POLICY_PROBE);
+
+            uint8_t parsed = 0;
+
+            if(batch_result > 0)
             {
-                int offset = 1 + i * 4;
-                uint16_t feat_id      = ((uint16_t)recv_data[offset] << 8) | recv_data[offset + 1];
-                uint8_t  feat_type    = recv_data[offset + 2];
-                uint8_t  feat_version = recv_data[offset + 3];
-                uint8_t  feat_idx     = i;  // 0-based: bulk includes root at 0
+                uint8_t in_frame = CENTURION_FEATURES_PER_FRAME;
 
-                caps.feature_map[feat_id]      = feat_idx;
-                caps.feature_versions[feat_id] = feat_version;
-
-                LOG_DEBUG("%s   [%2d] Feature 0x%04X V%u type=0x%02X",
-                          LOG_TAG, feat_idx, feat_id, feat_version, feat_type);
-
-                if(!FeatureVersionIsObserved(feat_id, feat_version))
+                if(recv_data[0] < in_frame)
                 {
-                    LOG_INFO("%s Feature 0x%04X V%u not previously observed, "
-                             "tripwire for version-gated behavior",
-                             LOG_TAG, feat_id, feat_version);
+                    in_frame = recv_data[0];
+                }
+
+                for(uint8_t j = 0; j < in_frame && (next + j) < count; j++)
+                {
+                    int      offset       = 1 + j * 4;
+                    uint16_t feat_id      = ((uint16_t)recv_data[offset] << 8) | recv_data[offset + 1];
+                    uint8_t  feat_type    = recv_data[offset + 2];
+                    uint8_t  feat_version = recv_data[offset + 3];
+                    uint8_t  feat_idx     = next + j;
+
+                    /*-------------------------------------*\
+                    | Root is index 0. A 0x0000 at any      |
+                    | other index is frame padding past the |
+                    | last entry, not a feature.            |
+                    \*-------------------------------------*/
+                    if(feat_id == HIDPP20_FEAT_IROOT && feat_idx != 0)
+                    {
+                        break;
+                    }
+
+                    caps.feature_map[feat_id]      = feat_idx;
+                    caps.feature_versions[feat_id] = feat_version;
+                    parsed++;
+                    resolved++;
+
+                    LOG_DEBUG("%s   [%2d] Feature 0x%04X V%u type=0x%02X",
+                              LOG_TAG, feat_idx, feat_id, feat_version, feat_type);
+
+                    if(!FeatureVersionIsObserved(feat_id, feat_version))
+                    {
+                        LOG_INFO("%s Feature 0x%04X V%u not previously observed, "
+                                 "tripwire for version-gated behavior",
+                                 LOG_TAG, feat_id, feat_version);
+                    }
                 }
             }
 
-            caps.feature_map_complete = true;
+            if(parsed == 0)
+            {
+                if(++misses > CENTURION_FEATURE_MISS_BUDGET)
+                {
+                    LOG_DEBUG("%s CenturionFeatureSet: no entries from index %u, "
+                              "stopping enumeration", LOG_TAG, next);
+                    break;
+                }
+
+                continue;
+            }
+
+            misses = 0;
+            next   = next + parsed;
         }
+
+        /*-------------------------------------------------*\
+        | Nothing read is an unreachable sub-device: leave  |
+        | the map incomplete for the caller. A partial read |
+        | is usable, but an unread feature reads as absent. |
+        \*-------------------------------------------------*/
+        if(resolved == 0)
+        {
+            return;
+        }
+
+        if(resolved < count)
+        {
+            LOG_INFO("%s CenturionFeatureSet: read %u of %u features, "
+                     "the rest are treated as absent",
+                     LOG_TAG, resolved, count);
+        }
+
+        caps.feature_map_complete = true;
     }
     else
     {
@@ -3333,6 +3548,8 @@ bool LogitechHIDPP20Controller::Probe()
     \*-----------------------------------------------------*/
     uint8_t test_idx = 0;
 
+    const HIDPP20RetryPolicy& first_contact = FirstContactPolicy();
+
     if(transport.type == HIDPP20_TRANSPORT_CENTURION)
     {
         /*-------------------------------------------------*\
@@ -3419,16 +3636,16 @@ bool LogitechHIDPP20Controller::Probe()
         else
         {
             LOG_DEBUG("%s No CentPPBridge: Centurion direct connection", LOG_TAG);
-            test_idx = GetFeatureIndex(HIDPP20_FEAT_FEATURE_SET, HIDPP20_POLICY_PROBE);
+            test_idx = GetFeatureIndex(HIDPP20_FEAT_FEATURE_SET, first_contact);
         }
     }
     else
     {
         /*-------------------------------------------------*\
-        | Standard HID++: probe FeatureSet (0x0001):        |
-        | fast-fail. The probe policy already includes      |
-        | its own retry; the outer loop is preserved for    |
-        | buffer-flushing behavior between attempts.        |
+        | Standard HID++: probe FeatureSet (0x0001). The    |
+        | policy retries on the wire; the outer loop adds a |
+        | buffer flush between bursts to clear stale        |
+        | queued responses.                                 |
         \*-------------------------------------------------*/
         for(int attempt = 0; attempt < 3 && test_idx == 0; attempt++)
         {
@@ -3443,7 +3660,7 @@ bool LogitechHIDPP20Controller::Probe()
                 LOG_DEBUG("%s IRoot retry %d at %s", LOG_TAG, attempt + 1, location.c_str());
             }
 
-            test_idx = GetFeatureIndex(HIDPP20_FEAT_FEATURE_SET, HIDPP20_POLICY_PROBE);
+            test_idx = GetFeatureIndex(HIDPP20_FEAT_FEATURE_SET, first_contact);
         }
     }
 
@@ -3583,7 +3800,7 @@ std::string LogitechHIDPP20Controller::ProbeIdentity()
     /*-----------------------------------------------------*\
     | Nothing else is worth asking until IRoot answers.     |
     \*-----------------------------------------------------*/
-    if(GetFeatureIndex(HIDPP20_FEAT_FEATURE_SET, HIDPP20_POLICY_PROBE) == 0)
+    if(GetFeatureIndex(HIDPP20_FEAT_FEATURE_SET, FirstContactPolicy()) == 0)
     {
         return "";
     }
@@ -6107,6 +6324,13 @@ void LogitechHIDPP20Controller::RediscoverFeatures()
     last_power_raw      = 0xFFFF;
 
     /*-----------------------------------------------------*\
+    | Clearing the index disarms the broadcast match until  |
+    | a read resolves it again, and the source often        |
+    | changed with the link.                                |
+    \*-----------------------------------------------------*/
+    pending_power_check.store(true);
+
+    /*-----------------------------------------------------*\
     | Force ApplyPowerSavingProfile's dedup to              |
     | re-emit its "Idle management: ..." line on            |
     | the next call so a path transition always             |
@@ -6161,12 +6385,24 @@ void LogitechHIDPP20Controller::RediscoverFeatures()
 std::string LogitechHIDPP20Controller::CurrentLinkKey() const
 {
     /*-----------------------------------------------------*\
-    | Key the link: rx#slot over the dongle, usb#idx        |
-    | direct. hidraw paths are reused by the kernel so      |
-    | aren't used. A slot collision across dongles is       |
-    | caught by the reclaim self-heal.                      |
+    | Key the link: rx#page#slot over the dongle,           |
+    | bt#page#idx over a Bluetooth radio, usb#page#idx on a |
+    | cable or a dongle of the device's own. hidraw paths   |
+    | are reused by the kernel so aren't used. Every direct |
+    | link is device index 0xFF, so the page is what        |
+    | separates two of them, a cable at 0xFF00 from a       |
+    | Centurion dongle at 0xFFA0. A slot collision across   |
+    | dongles is caught by the reclaim self-heal.           |
     \*-----------------------------------------------------*/
-    return std::string(wireless ? "rx#" : "usb#") + std::to_string((int)device_index);
+    const char* link = wireless                ? "rx#"
+                     : transport.bluetooth     ? "bt#"
+                                               : "usb#";
+
+    char key[32];
+
+    snprintf(key, sizeof(key), "%s%04X#%d", link, transport.usage_page, (int)device_index);
+
+    return std::string(key);
 }
 
 HIDPP20LinkIndexMap LogitechHIDPP20Controller::SnapshotLinkIndexMap() const
@@ -6297,7 +6533,9 @@ void LogitechHIDPP20Controller::StartPowerManager()
     | 500ms re-read happens one interval from now,          |
     | not immediately (we just applied above).              |
     \*-----------------------------------------------------*/
-    last_idle_poll = std::chrono::steady_clock::now();
+    last_idle_poll  = std::chrono::steady_clock::now();
+    last_power_poll = last_idle_poll;
+    pending_power_check.store(false);
 
     /*-----------------------------------------------------*\
     | Don't claim SW control here. The device runs its      |
@@ -6453,6 +6691,21 @@ void LogitechHIDPP20Controller::ReaderThreadFunc()
             }
 
             /*---------------------------------------------*\
+            | Feature 0x1004 broadcast: the power source    |
+            | changed. Flag a re-read rather than decode    |
+            | the event, so GetStatus stays the only        |
+            | reader of the layout. Cached index only,      |
+            | this thread must never send commands.         |
+            \*---------------------------------------------*/
+            if(idx_unified_battery != 0 && feat == idx_unified_battery &&
+               (func & 0x0F) != HIDPP20_SW_ID)
+            {
+                pending_power_check.store(true);
+
+                continue;
+            }
+
+            /*---------------------------------------------*\
             | Only queue responses to OUR commands. Our     |
             | commands use HIDPP20_SW_ID (0x0A) in the      |
             | low nibble. Firmware-generated messages       |
@@ -6578,21 +6831,30 @@ void LogitechHIDPP20Controller::PowerThreadFunc()
         }
 
         /*-------------------------------------------------*\
-        | Fast poll of idle settings + external-power       |
-        | flag. QueryExternalPower is a single HID++        |
-        | 0x1004 GetStatus call, cheap on wire and lets     |
-        | ApplyPowerSavingProfile pick between the          |
-        | on_battery and plugged_in profiles within half a  |
-        | second of a power-source transition. The idle-    |
-        | settings reload itself is purely in-memory.       |
+        | Read the power source on the device's broadcast.  |
+        | Each read is a 0x1004 GetStatus on the link that  |
+        | also carries paint, so the interval is only the   |
+        | backstop for devices that do not broadcast and    |
+        | for changes made while asleep.                    |
+        |                                                   |
+        | The idle-settings reload keeps its own fast tick: |
+        | it is an in-memory lookup and only reaches the    |
+        | wire when a timer value changes.                  |
         \*-------------------------------------------------*/
         if(caps.has_power_mgmt)
         {
             std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
+
+            if(pending_power_check.exchange(false)
+            || now - last_power_poll >= std::chrono::milliseconds(POWER_POLL_INTERVAL_MS))
+            {
+                last_power_poll = now;
+                QueryExternalPower();
+            }
+
             if(now - last_idle_poll >= std::chrono::milliseconds(500))
             {
                 last_idle_poll = now;
-                QueryExternalPower();
                 ApplyPowerSavingProfile();
             }
         }
@@ -6764,9 +7026,9 @@ void LogitechHIDPP20Controller::ApplyPowerSavingProfile()
     /*-----------------------------------------------------*\
     | Configured: pick the active profile based on          |
     | whether the device is currently externally            |
-    | powered. ps_on_external_ power is refreshed           |
-    | by QueryExternalPower() on the same 500 ms            |
-    | power-thread poll that calls us.                      |
+    | powered. ps_on_external_power is refreshed by         |
+    | QueryExternalPower() when the device broadcasts a     |
+    | change, and on the backstop interval.                 |
     \*-----------------------------------------------------*/
     const LogitechHIDPP20IdleProfile& profile = ps_on_external_power
         ? settings->pluggedIn()

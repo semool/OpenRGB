@@ -926,6 +926,7 @@
 #define PALIT_RTX3080TI_GAMEROCK_SUB_DEV                        0xF278
 #define PALIT_RTX3090_SUB_DEV                                   0x2204
 #define PALIT_RTX3090_GAMEROCK_SUB_DEV                          0xF278
+#define PALIT_RTX3090TI_GAMEROCK_SUB_DEV                        0xF294
 #define PALIT_RTX4060_SUB_DEV                                   0xF311
 #define PALIT_RTX4070_SUB_DEV                                   0xF302
 #define PALIT_RTX4070S_SUB_DEV                                  0xF302
@@ -958,6 +959,8 @@
 #define POWERCOLOR_RED_DEVIL_RX6650XT_SUB_DEV                   0x2418
 #define POWERCOLOR_RED_DEVIL_RX6750XT_SUB_DEV                   0x2419
 #define POWERCOLOR_RED_DEVIL_RX6950XT_SUB_DEV                   0x2420
+
+#define POWERCOLOR_RED_DEVIL_RX7900XTX_SUB_DEV                  0x2422
 
 #define POWERCOLOR_RED_DEVIL_RX9070XT_SUB_DEV                   0x2435
 #define POWERCOLOR_RED_DEVIL_RX9070_SUB_DEV                     0x2436

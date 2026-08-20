@@ -748,14 +748,20 @@ DetectedControllers DetectLogitechX56(hid_device_info* info, const std::string& 
 | Group the nodes of one physical device by path. Windows   |
 | splits a multi-collection HID interface into one node per |
 | collection (the RAP usage-1 and FAP usage-2 handles are   |
-| separate nodes); the paths differ only in the collection  |
-| token, so stripping it names the physical device. On      |
-| Linux/macOS the interface is one node and a path names    |
-| itself.                                                   |
+| separate nodes), and numbers the collection twice:        |
+|                                                           |
+|   ...&MI_02&Col01#8&b41415e&0&0000#{guid}   usage 1       |
+|   ...&MI_02&Col02#8&b41415e&0&0001#{guid}   usage 2       |
+|                                                           |
+| Trim both or the two nodes key apart and never bundle.    |
+| The instance id stays, so two identical receivers still   |
+| key apart. Linux/macOS paths carry no &Col token, so      |
+| neither trim runs and a path names itself.                |
 \*---------------------------------------------------------*/
 static std::string LogitechDevicePathKey(const char* path)
 {
-    std::string key = (path != nullptr) ? path : "";
+    std::string key        = (path != nullptr) ? path : "";
+    bool        collection = false;
 
     for(size_t pos = 0; pos + 4 <= key.size(); pos++)
     {
@@ -772,7 +778,19 @@ static std::string LogitechDevicePathKey(const char* path)
             }
 
             key.erase(pos, end - pos);
+            collection = true;
             break;
+        }
+    }
+
+    if(collection)
+    {
+        size_t guid = key.rfind('#');
+        size_t last = (guid == std::string::npos) ? std::string::npos : key.rfind('&', guid);
+
+        if(last != std::string::npos)
+        {
+            key.erase(last, guid - last);
         }
     }
 
@@ -1135,7 +1153,9 @@ static std::vector<std::string> HIDPP20Enumerate(hid_device_info* info)
     }
 
     {
-        LogitechHIDPP20Controller probe(dev, info->path, LOGITECH_DEFAULT_DEVICE_INDEX, false, nullptr, info->usage_page);
+        LogitechHIDPP20Controller probe(dev, info->path, LOGITECH_DEFAULT_DEVICE_INDEX, false, nullptr,
+                                        info->usage_page, nullptr,
+                                        info->bus_type == HID_API_BUS_BLUETOOTH);
 
         std::string unit_id = probe.ProbeIdentity();
 
@@ -1164,7 +1184,12 @@ static std::vector<std::string> HIDPP20Enumerate(hid_device_info* info)
     | Linux and macOS expose the whole interface as one     |
     | node that accepts every report ID, so it may not key  |
     | a usage-1 handle. One handle serves RAP and FAP both. |
+    | Not on Windows: the node this runs on is the usage-2  |
+    | collection, which rejects the 7-byte writes the       |
+    | pairing read is made of. Aliasing it turns a missing  |
+    | handle into silent read timeouts.                     |
     \*-----------------------------------------------------*/
+#if !defined(_WIN32)
     if(bundle.find(1) == bundle.end())
     {
         hid_device* rap = hid_open_path(info->path);
@@ -1174,6 +1199,7 @@ static std::vector<std::string> HIDPP20Enumerate(hid_device_info* info)
             bundle.emplace((uint8_t)1, rap);
         }
     }
+#endif
 
     wireless_map            wireless_devices;
     std::map<uint8_t, bool> online;
@@ -1279,6 +1305,7 @@ public:
     uint16_t                    vendor_id           = 0;
     uint16_t                    product_id          = 0;
     bool                        behind_receiver     = false;
+    bool                        bluetooth           = false;
     std::shared_ptr<std::mutex> node_mutex;
     std::string                 pairing_name;
 };
@@ -1408,7 +1435,8 @@ static RGBController_LogitechHIDPP20* HIDPP20BuildController(const HIDPP20BuildT
 
     LogitechHIDPP20Controller* controller = new LogitechHIDPP20Controller(dev, target.node_path.c_str(), target.index,
                                                                           target.behind_receiver, target.node_mutex,
-                                                                          target.usage_page, perkey_vl);
+                                                                          target.usage_page, perkey_vl,
+                                                                          target.bluetooth);
 
     if(target.behind_receiver)
     {
@@ -1537,6 +1565,7 @@ static DetectedControllers HIDPP20Create(hid_device_info* info, const std::strin
     target.product_id      = (uint16_t)info->product_id;
     target.node_mutex      = slot.node_mutex;
     target.pairing_name    = slot.pairing_name;
+    target.bluetooth       = (info->bus_type == HID_API_BUS_BLUETOOTH);
 
     HIDPP20RecordTarget(target);
 
@@ -1663,10 +1692,10 @@ DetectedControllers DetectLogitechHIDPP20(hid_device_info* info, const std::stri
 | The registrations cover every legacy transport signature:                                                                             |
 |  any interface, 0xFF00 usage 2    standard HID++ long report (modern keyboards/mice, receivers, G915 family, wired Lightspeed mice).  |
 |                                   Usage 2 is the collection we write to, on Windows, the only one that accepts our writes.            |
-|  interface 1, 0xFF43 any usage    keyboards (G213/G512/G610/G810/G813/G815/G910/G Pro); usage varies by model                         |
+|  any interface, 0xFF43 any usage  keyboards (G213/G512/G610/G810/G813/G815/G910/G Pro), the G560 speaker, the                         |
+|                                   G933 headset, and Bluetooth nodes. Not interface-keyed: a Bluetooth node                            |
+|                                   reports interface -1, which is also HID_INTERFACE_ANY, so it can never match.                       |
 |  interface 1, 0xFF00 any usage    older mice whose HID++ collection is not the usage-2 one                                            |
-|  interface 2, 0xFF43 usage 514    G560 speaker                                                                                        |
-|  interface 3, 0xFF43 usage 514    G933 headset                                                                                        |
 |  any interface, 0xFFA0 usage 1    Centurion (G522, PRO X 2)                                                                           |
 |                                                                                                                                       |
 | Not covered, deliberately: the G600 (page 0xFF80) and the X56 (own VID) are not HID++ 2.0. A matching non-HID++ node costs one failed |
@@ -1678,11 +1707,14 @@ DetectedControllers DetectLogitechHIDPP20(hid_device_info* info, const std::stri
 | DUMMY_DEVICE_DETECTOR("Logitech G560 Lightsync Speaker", DetectLogitechHIDPP20, 0x046D, 0x0A78 )                                      |
 \*-------------------------------------------------------------------------------------------------------------------------------------*/
 REGISTER_HID_DETECTOR_PU_ONLY ("Logitech HID++ 2.0", DetectLogitechHIDPP20, 0xFF00, 2);
-REGISTER_HID_DETECTOR_IP_ONLY ("Logitech HID++ 2.0", DetectLogitechHIDPP20, 1, 0xFF43);
+REGISTER_HID_DETECTOR_P_ONLY  ("Logitech HID++ 2.0", DetectLogitechHIDPP20, 0xFF43);
 REGISTER_HID_DETECTOR_IP_ONLY ("Logitech HID++ 2.0", DetectLogitechHIDPP20, 1, 0xFF00);
-REGISTER_HID_DETECTOR_IPU_ONLY("Logitech HID++ 2.0", DetectLogitechHIDPP20, 2, 0xFF43, 514);
-REGISTER_HID_DETECTOR_IPU_ONLY("Logitech HID++ 2.0", DetectLogitechHIDPP20, 3, 0xFF43, 514);
 REGISTER_HID_DETECTOR_PU_ONLY ("Logitech HID++ 2.0", DetectLogitechHIDPP20, 0xFFA0, 1);
+
+REGISTER_CUSTOM_UDEV_RULE(logitech_hidpp20, "Logitech HID++ 2.0", "SUBSYSTEM==\"hidraw\", ATTRS{idVendor}==\"046d\", TAG+=\"uaccess\", TAG+=\"Logitech_HID_20\"\nSUBSYSTEM==\"usb\", ATTR{idVendor}==\"046d\", TAG+=\"uaccess\", TAG+=\"Logitech_HID_20\"");
+REGISTER_CUSTOM_UDEV_RULE(logitech_g560, "Logitech G560 Lightsync Speaker", "SUBSYSTEMS==\"usb|hidraw\", ATTRS{idVendor}==\"046d\", ATTRS{idProduct}==\"0a78\", TAG+=\"uaccess\", TAG+=\"Logitech_G560_Lightsync_Speaker\"");
+REGISTER_CUSTOM_UDEV_RULE(logitech_lightspeed, "Logitech G Lightspeed Receiver", "SUBSYSTEMS==\"usb|hidraw\", ATTRS{idVendor}==\"046d\", ATTRS{idProduct}==\"c539\", TAG+=\"uaccess\", TAG+=\"Logitech_G_Lightspeed_Receiver\"");
+REGISTER_CUSTOM_UDEV_RULE(logitech_powerplay, "Logitech Powerplay Mat Receiver", "SUBSYSTEMS==\"usb|hidraw\", ATTRS{idVendor}==\"046d\", ATTRS{idProduct}==\"c53a\", TAG+=\"uaccess\", TAG+=\"Logitech_Powerplay_Mat_Receiver\"");
 
 /*-------------------------------------------------------------------------------------------------------------------------------------------------*\
 | Keyboards                                                                                                                                         |

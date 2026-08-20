@@ -11,6 +11,8 @@
 \*---------------------------------------------------------*/
 
 #include <chrono>
+#include <cctype>
+#include <cstdio>
 #include "DetectionManager.h"
 #include "JsonUtils.h"
 #include "LogManager.h"
@@ -22,6 +24,10 @@
 
 #ifdef __linux__
 #include <unistd.h>
+#endif
+
+#ifdef __APPLE__
+#include <hidapi_darwin.h>
 #endif
 
 using namespace std::chrono_literals;
@@ -343,6 +349,21 @@ void DetectionManager::RegisterPreDetectionHook(PreDetectionHookFunction hook)
 {
     pre_detection_hooks.push_back(hook);
 }
+
+#ifdef __linux__
+/*---------------------------------------------------------*\
+| Custom Udev Rules Registration Function                   |
+\*---------------------------------------------------------*/
+void DetectionManager::RegisterCustomUdevRule(std::string name, std::string rule)
+{
+    CustomUdevRuleBlock block;
+
+    block.name = name;
+    block.rule = rule;
+
+    custom_udev_rules.push_back(block);
+}
+#endif
 
 /*---------------------------------------------------------*\
 | Detection Callback Registration Functions                 |
@@ -1353,6 +1374,15 @@ void DetectionManager::BackgroundHIDInit()
 
     LOG_DEBUG("[%s] Initializing HID interfaces: %s", DETECTIONMANAGER, ((hid_status == 0) ? "Success" : "Failed"));
 
+#ifdef __APPLE__
+    /*-----------------------------------------------------*\
+    | hidapi defaults macOS opens to exclusive (seize)      |
+    | mode: privileged, and a second open of a held device  |
+    | fails. Shared matches Linux and Windows.              |
+    \*-----------------------------------------------------*/
+    hid_darwin_set_open_exclusive(0);
+#endif
+
 #ifdef __linux__
 #ifdef __GLIBC__
     /*-----------------------------------------------------*\
@@ -2055,3 +2085,214 @@ bool DetectionManager::IsAnyDimmDetectorEnabled(json &detector_settings)
     }
     return false;
 }
+
+#ifdef __linux__
+/*---------------------------------------------------------*\
+| Convert a device name into a udev tag.                    |
+|                                                           |
+| Replace spaces with underscores and strip any character   |
+| that is not alphanumeric, e.g.                            |
+|   "MSI Mystic Light MS_7E12" -> "MSI_Mystic_Light_MS7E12" |
+| This matches the name processing used by                  |
+| build-udev-rules.sh so both generators produce the same   |
+| device name tags.                                         |
+\*---------------------------------------------------------*/
+static std::string UdevDeviceNameToTag(std::string device_name)
+{
+    for(std::string::iterator character = device_name.begin(); character != device_name.end();)
+    {
+        if(*character == ' ')
+        {
+            *character = '_';
+            ++character;
+        }
+        else if(!isalnum(*character))
+        {
+            character = device_name.erase(character);
+        }
+        else
+        {
+            ++character;
+        }
+    }
+
+    return device_name;
+}
+
+/*---------------------------------------------------------*\
+| Apply the processed device name tag to a registered custom|
+| udev rule. Any device-name TAG value inside the rule is   |
+| replaced with the normalized device name so that custom   |
+| rules follow the same naming convention as the grouped    |
+| HID rules. "uaccess" tags and tags that already match are |
+| left untouched.                                           |
+\*---------------------------------------------------------*/
+static std::string UdevApplyDeviceNameTagToRule(const std::string& rule, const std::string& device_name_tag)
+{
+    std::string       processed_rule  = rule;
+    const std::string tag_prefix      = "TAG+=\"";
+    std::size_t       search_position = 0;
+
+    while(search_position < processed_rule.length())
+    {
+        std::size_t tag_start = processed_rule.find(tag_prefix, search_position);
+        if(tag_start == std::string::npos)
+        {
+            break;
+        }
+
+        std::size_t value_start = tag_start + tag_prefix.length();
+        std::size_t value_end   = processed_rule.find('"', value_start);
+
+        if(value_end == std::string::npos)
+        {
+            break;
+        }
+
+        std::string tag_value     = processed_rule.substr(value_start, value_end - value_start);
+        std::string new_tag_value = tag_value;
+
+        if(tag_value != "uaccess" && tag_value != device_name_tag)
+        {
+            new_tag_value = device_name_tag;
+        }
+
+        if(new_tag_value != tag_value)
+        {
+            processed_rule.replace(value_start, value_end - value_start, new_tag_value);
+        }
+
+        search_position = value_start + new_tag_value.length() + 1;
+    }
+
+    return processed_rule;
+}
+
+/*---------------------------------------------------------*\
+| Udev rules generation function                            |
+\*---------------------------------------------------------*/
+bool DetectionManager::GenerateUdevRules(const std::string& filepath)
+{
+    LOG_INFO("[%s] Generating udev rules file: %s", DETECTIONMANAGER, filepath.c_str());
+
+    FILE* output_file = fopen(filepath.c_str(), "w");
+    if(!output_file)
+    {
+        LOG_ERROR("[%s] Failed to open output file: %s", DETECTIONMANAGER, filepath.c_str());
+        return false;
+    }
+
+    /*-----------------------------------------------------*\
+    | Write udev rules header                               |
+    \*-----------------------------------------------------*/
+    fprintf(output_file, "#---------------------------------------------------------------#\n");
+    fprintf(output_file, "#  OpenRGB udev rules                                           #\n");
+
+    int written             = fprintf(output_file, "#  Generated by OpenRGB " VERSION_STRING);
+    int total_line_width    = 64;
+
+    if(written < total_line_width)
+    {
+        fprintf(output_file, "%*s#\n", total_line_width - written, "");
+    }
+    else
+    {
+        fprintf(output_file, " #\n");
+    }
+
+    written                 = fprintf(output_file, "#  Git commit: " GIT_COMMIT_ID);
+    
+    if(written < total_line_width)
+    {
+        fprintf(output_file, "%*s#\n", total_line_width - written, "");
+    }
+    else
+    {
+        fprintf(output_file, " #\n");
+    }
+
+    fprintf(output_file, "#---------------------------------------------------------------#\n");
+    fprintf(output_file, "\n");
+    fprintf(output_file, "#---------------------------------------------------------------#\n");
+    fprintf(output_file, "#  User I2C/SMBus Access                                        #\n");
+    fprintf(output_file, "#---------------------------------------------------------------#\n");
+    fprintf(output_file, "KERNEL==\"i2c-[0-99]*\", TAG+=\"uaccess\"\n");
+    fprintf(output_file, "\n");
+    fprintf(output_file, "#---------------------------------------------------------------#\n");
+    fprintf(output_file, "#  Super I/O Access                                             #\n");
+    fprintf(output_file, "#---------------------------------------------------------------#\n");
+    fprintf(output_file, "KERNEL==\"port\", TAG+=\"uaccess\"\n");
+    fprintf(output_file, "\n");
+
+    /*-----------------------------------------------------*\
+    | Group detectors by name to avoid duplicate headers    |
+    \*-----------------------------------------------------*/
+    std::map<std::string, std::vector<std::pair<uint16_t, uint16_t>>> detector_groups;
+
+    for(std::size_t detector_idx = 0; detector_idx < hid_specific_detectors.size(); detector_idx++)
+    {
+        HIDDeviceDetectorBlock& detector = hid_specific_detectors[detector_idx];
+
+        if(detector.vid == HID_VID_ANY || detector.pid == HID_PID_ANY)
+        {
+            continue;
+        }
+
+        detector_groups[detector.name].push_back({(uint16_t)detector.vid, (uint16_t)detector.pid});
+    }
+
+    for(std::size_t detector_idx = 0; detector_idx < hid_wrapped_specific_detectors.size(); detector_idx++)
+    {
+        HIDWrappedDeviceDetectorBlock& detector = hid_wrapped_specific_detectors[detector_idx];
+
+        if(detector.vid == HID_VID_ANY || detector.pid == HID_PID_ANY)
+        {
+            continue;
+        }
+
+        std::string group_name = detector.name;
+        detector_groups[group_name].push_back({(uint16_t)detector.vid, (uint16_t)detector.pid});
+    }
+
+    /*-----------------------------------------------------*\
+    | Write grouped HID device rules                        |
+    \*-----------------------------------------------------*/
+    for(const std::pair<const std::string, std::vector<std::pair<uint16_t, uint16_t>>>& group : detector_groups)
+    {
+        fprintf(output_file, "#---------------------------------------------------------------#\n");
+        fprintf(output_file, "#  %s\n", group.first.c_str());
+        fprintf(output_file, "#---------------------------------------------------------------#\n");
+
+        std::string device_name_tag = UdevDeviceNameToTag(group.first);
+
+        for(const std::pair<uint16_t, uint16_t>& vid_pid : group.second)
+        {
+            fprintf(output_file, "SUBSYSTEMS==\"usb|hidraw\", ATTRS{idVendor}==\"%04x\", ATTRS{idProduct}==\"%04x\", TAG+=\"uaccess\", TAG+=\"%s\"\n", vid_pid.first, vid_pid.second, device_name_tag.c_str());
+        }
+        fprintf(output_file, "\n");
+    }
+
+    /*-----------------------------------------------------*\
+    | Write custom udev rules                               |
+    \*-----------------------------------------------------*/
+    for(const CustomUdevRuleBlock& custom_rule : custom_udev_rules)
+    {
+        fprintf(output_file, "#---------------------------------------------------------------#\n");
+        fprintf(output_file, "#  %s\n", custom_rule.name.c_str());
+        fprintf(output_file, "#---------------------------------------------------------------#\n");
+
+        /*-----------------------------------------------------*\
+        | Apply the shared device name processing to any        |
+        | device-name tag embedded in the custom rule           |
+        \*-----------------------------------------------------*/
+        std::string device_name_tag = UdevDeviceNameToTag(custom_rule.name);
+        fprintf(output_file, "%s\n", UdevApplyDeviceNameTagToRule(custom_rule.rule, device_name_tag).c_str());
+        fprintf(output_file, "\n");
+    }
+
+    fclose(output_file);
+
+    LOG_INFO("[%s] Successfully generated udev rules file: %s", DETECTIONMANAGER, filepath.c_str());
+    return true;
+}
+#endif

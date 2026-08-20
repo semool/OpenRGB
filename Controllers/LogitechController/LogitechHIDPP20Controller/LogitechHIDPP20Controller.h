@@ -118,6 +118,12 @@
 #define HIDPP20_8080_KEYS_PER_FRAME         14
 
 /*---------------------------------------------------------*\
+| Feature 0x0001 functions (FeatureSet)                     |
+\*---------------------------------------------------------*/
+#define FN_0001_GET_COUNT                   0x00
+#define FN_0001_GET_FEATURE_ID              0x10
+
+/*---------------------------------------------------------*\
 | Feature 0x0620 functions (headset RGB hostmode)           |
 \*---------------------------------------------------------*/
 #define FN_0620_GET_INFO                    0x00
@@ -366,6 +372,7 @@ struct HIDPP20Transport
 {
     HIDPP20TransportType  type;
     uint16_t            usage_page;         // 0xFF00, 0xFF43, or 0xFFA0
+    bool                bluetooth;          // link is a Bluetooth radio, not USB
     uint8_t             report_id;          // 0x10/0x11 for standard, 0x51/0x50 for Centurion
     bool                addressed;          // Centurion 0x50 has device address byte
     uint8_t             device_address;     // Centurion 0x50: device address (e.g., 0x23)
@@ -454,6 +461,10 @@ static constexpr uint16_t HIDPP20_BACKOFF_RELIABLE[] =
     { 0, 63, 125, 250, 500, 1000, 2000 };
 static constexpr uint16_t HIDPP20_BACKOFF_PROBE[] =
     { 0, 100 };
+static constexpr uint16_t HIDPP20_BACKOFF_FIRST_CONTACT[] =
+    { 0, 100, 250, 500 };
+static constexpr uint16_t HIDPP20_BACKOFF_BLUETOOTH[] =
+    { 0, 200, 500 };
 
 /*---------------------------------------------------------*\
 | SW-control reclaim backoff. Used by ReconnectDevice       |
@@ -558,6 +569,44 @@ static constexpr HIDPP20RetryPolicy HIDPP20_POLICY_PROBE = {
 };
 
 /*---------------------------------------------------------*\
+| First-contact policy: probe budget for a device named by  |
+| a receiver's pairing table. A radio leaving power save    |
+| can miss the first frames; worst case ~1.2s.              |
+\*---------------------------------------------------------*/
+static constexpr HIDPP20RetryPolicy HIDPP20_POLICY_FIRST_CONTACT = {
+    HIDPP20_BACKOFF_FIRST_CONTACT,
+    sizeof(HIDPP20_BACKOFF_FIRST_CONTACT) / sizeof(uint16_t),
+    300,    // read window
+    true,   // flush_before
+    true,   // retry_on_busy
+    "first-contact"
+};
+
+/*---------------------------------------------------------*\
+| Bluetooth policy: a BLE link answers its first exchange   |
+| in ~300ms cold and ~40ms once awake, so the first-contact |
+| window is sized for the cold case rather than retried     |
+| into it. Worst case ~2.1s for a node that never answers.  |
+\*---------------------------------------------------------*/
+static constexpr HIDPP20RetryPolicy HIDPP20_POLICY_BLUETOOTH = {
+    HIDPP20_BACKOFF_BLUETOOTH,
+    sizeof(HIDPP20_BACKOFF_BLUETOOTH) / sizeof(uint16_t),
+    700,    // read window
+    true,   // flush_before
+    true,   // retry_on_busy
+    "bluetooth"
+};
+
+/*---------------------------------------------------------*\
+| Grace for an answer to a send that already timed out. It  |
+| arrives after the retry has been answered, and IRoot      |
+| replies carry nothing that ties them to the feature they  |
+| were asked about, so one left in the pipe is read as the  |
+| next request's answer.                                    |
+\*---------------------------------------------------------*/
+#define HIDPP20_LATE_ANSWER_GRACE_MS    150
+
+/*---------------------------------------------------------*\
 | Rolling resync.  The per-key stream is a delta and takes  |
 | an ACK as proof of paint, so a write the device answers   |
 | but does not apply leaves that key wrong until its colour |
@@ -580,7 +629,8 @@ public:
                             uint8_t device_index, bool wireless,
                             std::shared_ptr<std::mutex> mutex_ptr,
                             uint16_t usage_page = 0xFF00,
-                            hid_device* perkey_vl_dev = nullptr);
+                            hid_device* perkey_vl_dev = nullptr,
+                            bool bluetooth = false);
     ~LogitechHIDPP20Controller();
 
     /*-----------------------------------------------------*\
@@ -927,6 +977,29 @@ private:
                                    uint8_t* recv_data, size_t recv_max);
 
     /*-----------------------------------------------------*\
+    | True when a payload of len fits the short (0x10)      |
+    | frame and this collection still accepts one.          |
+    \*-----------------------------------------------------*/
+    bool            PrefersShortFrame(size_t len) const;
+
+    /*-----------------------------------------------------*\
+    | Discard up to `expected` answers to sends that had    |
+    | already timed out when the reply to the retry came    |
+    | in.                                                   |
+    \*-----------------------------------------------------*/
+    void            DrainLateAnswers(uint8_t feat_idx, uint8_t function, int expected);
+
+    /*-----------------------------------------------------*\
+    | Budget for the first exchange with a node. A device   |
+    | named by a receiver's pairing table is known to speak |
+    | HID++, and a Bluetooth link can take several          |
+    | connection intervals to answer; both get the wider    |
+    | window. An unknown wired node keeps the tight probe   |
+    | and fails fast.                                       |
+    \*-----------------------------------------------------*/
+    const HIDPP20RetryPolicy& FirstContactPolicy() const;
+
+    /*-----------------------------------------------------*\
     | Unified send-and-ack primitive with retry policy.     |
     | All command paths converge here. Returns:             |
     | >0 : bytes copied into recv_data                      |
@@ -1038,6 +1111,7 @@ private:
     std::atomic<bool>       power_thread_running;
     std::atomic<int>        pending_activity;       // -1=none, 0=idle, 1+=active
     std::atomic<int>        pending_connection;     // 0=none, +1=connected, -1=disconnected
+    std::atomic<bool>       pending_power_check;    // device broadcast 0x1004, re-read its status
     std::atomic<bool>       device_online;          // false when device is unreachable
     std::atomic<int>        consecutive_timeouts;   // reset on successful response
 
@@ -1076,6 +1150,14 @@ private:
     | about half a second without any callback plumbing.    |
     \*-----------------------------------------------------*/
     std::chrono::steady_clock::time_point last_idle_poll;
+
+    /*-----------------------------------------------------*\
+    | Last power-source read. Reads are driven by the       |
+    | device's 0x1004 broadcast; this interval is the       |
+    | backstop, see PowerThreadFunc.                        |
+    \*-----------------------------------------------------*/
+    #define POWER_POLL_INTERVAL_MS              60000
+    std::chrono::steady_clock::time_point last_power_poll;
 
     /*-----------------------------------------------------*\
     | Effective idle/sleep timers used by the state         |
