@@ -3532,6 +3532,10 @@ NetPacketStatus NetworkServer::ProcessRequest_RGBController_UpdateZoneMode(Netwo
             controllers[controller_idx]->zones[zone_idx].active_mode = mode_idx;
         }
     }
+    else if(mode_idx == -1)
+    {
+        controllers[controller_idx]->zones[zone_idx].active_mode = mode_idx;
+    }
 
     /*-----------------------------------------------------*\
     | Unlock access mutex                                   |
@@ -3791,7 +3795,7 @@ void NetworkServer::SendReply_PluginList(NetworkClientInfo* client_info)
     /*---------------------------------------------------------*\
     | Calculate data size                                       |
     \*---------------------------------------------------------*/
-    unsigned short num_plugins = (unsigned short)plugin_manager->GetPluginCount();
+    unsigned short num_plugins = plugin_manager ? (unsigned short)plugin_manager->GetPluginCount() : 0;
 
     data_size += sizeof(data_size);
     data_size += sizeof(num_plugins);

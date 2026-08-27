@@ -45,6 +45,7 @@ const char* DETECTIONMANAGER = "DetectionManager";
 /*---------------------------------------------------------*\
 | Warning Dialog Strings                                    |
 \*---------------------------------------------------------*/
+#ifdef _WIN32
 static const char* I2C_ERR_WIN =   QT_TRANSLATE_NOOP("DetectionManager",
                                                      "<h2>Warning:</h2>"
                                                      "<p>One or more I2C/SMBus interfaces failed to initialize.</p>"
@@ -52,6 +53,8 @@ static const char* I2C_ERR_WIN =   QT_TRANSLATE_NOOP("DetectionManager",
                                                      "<p>On Windows, this is usually caused by a failure to load the PawnIO driver.</p>"
                                                      "<p>For OpenRGB to access these devices, you must install PawnIO from <a href='https://pawnio.eu/'>https://pawnio.eu</a> and run OpenRGB as administrator or as a system service.</p>"
                                                      "<p>If you are not using any of the devices listed above, you can safely ignore this message.</p>");
+#endif
+#ifdef __linux__
 static const char* I2C_ERR_LINUX = QT_TRANSLATE_NOOP("DetectionManager",
                                                      "<h2>Warning:</h2>"
                                                      "<p>One or more I2C/SMBus interfaces failed to initialize.</p>"
@@ -60,7 +63,9 @@ static const char* I2C_ERR_LINUX = QT_TRANSLATE_NOOP("DetectionManager",
                                                      "<p>For OpenRGB to access these devices, you must load the i2c-dev module along with the correct I2C driver module for your motherboard. "
                                                      "This is usually i2c-piix4 for AMD systems and i2c-i801 for Intel systems.</p>"
                                                      "<p>If you are not using any of the devices listed above, you can safely ignore this message.</p>");
+#endif
 
+#ifdef __linux__
 static const char* UDEV_MISSING =  QT_TRANSLATE_NOOP("DetectionManager",
                                                      "<h2>Warning:</h2>"
                                                      "<p>The OpenRGB udev rules are not installed.</p>"
@@ -72,6 +77,7 @@ static const char* UDEV_MUTLI =    QT_TRANSLATE_NOOP("DetectionManager",
                                                      "<p>Multiple OpenRGB udev rules are installed.</p>"
                                                      "<p>The udev rules file 60-openrgb.rules is installed in both /etc/udev/rules.d and /usr/lib/udev/rules.d.</p>"
                                                      "<p>Multiple udev rules files can conflict, it is recommended to remove one of them.</p>");
+#endif
 
 /*---------------------------------------------------------*\
 | Default hidapi wrappter that just uses default hidapi     |
@@ -1502,22 +1508,23 @@ void DetectionManager::RunHIDDetector(hid_device_info* current_hid_device, json&
             if(this_device_enabled)
             {
                 /*-----------------------------------------*\
-                | If this was a specific detector, this     |
-                | device VID/PID has at least one specific  |
-                | detector available, so ignore generic     |
-                | detectors.                                |
-                \*-----------------------------------------*/
-                if(!generic_detector)
-                {
-                    skip_generic_detectors = true;
-                }
-
-                /*-----------------------------------------*\
                 | Now compare the detector to see if it     |
                 | should run.                               |
                 \*-----------------------------------------*/
                 if(detector->compare(current_hid_device))
                 {
+                    /*-------------------------------------*\
+                    | A matching specific detector blocks   |
+                    | generic detectors from also running   |
+                    | on this interface, so other           |
+                    | interfaces of the same VID/PID are    |
+                    | unaffected.                           |
+                    \*-------------------------------------*/
+                    if(!generic_detector)
+                    {
+                        skip_generic_detectors = true;
+                    }
+
                     detection_string = detector->name.c_str();
 
                     SignalUpdate(DETECTIONMANAGER_UPDATE_REASON_DETECTION_PROGRESS_CHANGED);
@@ -1618,22 +1625,23 @@ void DetectionManager::RunHIDWrappedDetector(const hidapi_wrapper* wrapper, hid_
             if(this_device_enabled)
             {
                 /*-----------------------------------------*\
-                | If this was a specific detector, this     |
-                | device VID/PID has at least one specific  |
-                | detector available, so ignore generic     |
-                | detectors.                                |
-                \*-----------------------------------------*/
-                if(!generic_detector)
-                {
-                    skip_generic_detectors = true;
-                }
-
-                /*-----------------------------------------*\
                 | Now compare the detector to see if it     |
                 | should run.                               |
                 \*-----------------------------------------*/
                 if(detector->compare(current_hid_device))
                 {
+                    /*-------------------------------------*\
+                    | A matching specific detector blocks   |
+                    | generic detectors from also running   |
+                    | on this interface, so other           |
+                    | interfaces of the same VID/PID are    |
+                    | unaffected.                           |
+                    \*-------------------------------------*/
+                    if(!generic_detector)
+                    {
+                        skip_generic_detectors = true;
+                    }
+
                     detection_string = detector->name.c_str();
 
                     SignalUpdate(DETECTIONMANAGER_UPDATE_REASON_DETECTION_PROGRESS_CHANGED);
