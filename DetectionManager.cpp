@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cctype>
 #include <cstdio>
+#include <set>
 #include "DetectionManager.h"
 #include "JsonUtils.h"
 #include "LogManager.h"
@@ -1917,6 +1918,78 @@ void DetectionManager::UpdateDetectorSettings()
     }
 
     /*-----------------------------------------------------*\
+    | Loop through the existing detector settings and       |
+    | remove any detectors that no longer exist in the      |
+    | registered detector lists.                            |
+    \------------------------------------------------------*/
+    if(detector_settings.contains("detectors") && detector_settings["detectors"].is_object())
+    {
+        std::set<std::string> active_detector_names;
+
+        /*-------------------------------------------------*\
+        | Collect all currently registered detector names   |
+        \--------------------------------------------------*/
+        for(std::size_t i2c_detector_idx = 0; i2c_detector_idx < i2c_device_detector_strings.size(); i2c_detector_idx++)
+        {
+            active_detector_names.insert(i2c_device_detector_strings[i2c_detector_idx]);
+        }
+
+        for(std::size_t i2c_detector_idx = 0; i2c_detector_idx < i2c_dram_device_detectors.size(); i2c_detector_idx++)
+        {
+            active_detector_names.insert(i2c_dram_device_detectors[i2c_detector_idx].name);
+        }
+
+        for(std::size_t i2c_pci_detector_idx = 0; i2c_pci_detector_idx < i2c_pci_device_detectors.size(); i2c_pci_detector_idx++)
+        {
+            active_detector_names.insert(i2c_pci_device_detectors[i2c_pci_detector_idx].name);
+        }
+
+        for(std::size_t hid_detector_idx = 0; hid_detector_idx < hid_generic_detectors.size(); hid_detector_idx++)
+        {
+            active_detector_names.insert(hid_generic_detectors[hid_detector_idx].name);
+        }
+
+        for(std::size_t hid_detector_idx = 0; hid_detector_idx < hid_specific_detectors.size(); hid_detector_idx++)
+        {
+            active_detector_names.insert(hid_specific_detectors[hid_detector_idx].name);
+        }
+
+        for(std::size_t hid_wrapped_detector_idx = 0; hid_wrapped_detector_idx < hid_wrapped_generic_detectors.size(); hid_wrapped_detector_idx++)
+        {
+            active_detector_names.insert(hid_wrapped_generic_detectors[hid_wrapped_detector_idx].name);
+        }
+
+        for(std::size_t hid_wrapped_detector_idx = 0; hid_wrapped_detector_idx < hid_wrapped_specific_detectors.size(); hid_wrapped_detector_idx++)
+        {
+            active_detector_names.insert(hid_wrapped_specific_detectors[hid_wrapped_detector_idx].name);
+        }
+
+        for(std::size_t detector_idx = 0; detector_idx < device_detector_strings.size(); detector_idx++)
+        {
+            active_detector_names.insert(device_detector_strings[detector_idx]);
+        }
+
+        /*-------------------------------------------------*\
+        | Remove stale detector entries                     |
+        \--------------------------------------------------*/
+        json active_detectors;
+        for(const nlohmann::detail::iteration_proxy_value<nlohmann::json::iterator>& element : detector_settings["detectors"].items())
+        {
+            if(active_detector_names.count(element.key()) > 0)
+            {
+                active_detectors[element.key()] = element.value();
+            }
+            else
+            {
+                LOG_INFO("[%s] Removing stale detector \"%s\" from settings", DETECTIONMANAGER, element.key().c_str());
+                save_settings = true;
+            }
+        }
+
+        detector_settings["detectors"] = active_detectors;
+    }
+
+    /*-----------------------------------------------------*\
     | If there were any setting changes that need to be     |
     | saved, set the settings in the settings manager and   |
     | save them.                                            |
@@ -2251,37 +2324,37 @@ bool DetectionManager::WriteUdevRules(FILE* output_file)
     /*-----------------------------------------------------*\
     | Group detectors by name to avoid duplicate headers    |
     \*-----------------------------------------------------*/
-    std::map<std::string, std::vector<std::pair<uint16_t, uint16_t>>> detector_groups;
+    std::map<std::string, std::vector<std::pair<int, int>>> detector_groups;
 
     for(std::size_t detector_idx = 0; detector_idx < hid_specific_detectors.size(); detector_idx++)
     {
         HIDDeviceDetectorBlock& detector = hid_specific_detectors[detector_idx];
 
-        if(detector.vid == HID_VID_ANY || detector.pid == HID_PID_ANY)
+        if(detector.vid == HID_VID_ANY && detector.pid == HID_PID_ANY)
         {
             continue;
         }
 
-        detector_groups[detector.name].push_back({(uint16_t)detector.vid, (uint16_t)detector.pid});
+        detector_groups[detector.name].push_back({detector.vid, detector.pid});
     }
 
     for(std::size_t detector_idx = 0; detector_idx < hid_wrapped_specific_detectors.size(); detector_idx++)
     {
         HIDWrappedDeviceDetectorBlock& detector = hid_wrapped_specific_detectors[detector_idx];
 
-        if(detector.vid == HID_VID_ANY || detector.pid == HID_PID_ANY)
+        if(detector.vid == HID_VID_ANY && detector.pid == HID_PID_ANY)
         {
             continue;
         }
 
         std::string group_name = detector.name;
-        detector_groups[group_name].push_back({(uint16_t)detector.vid, (uint16_t)detector.pid});
+        detector_groups[group_name].push_back({detector.vid, detector.pid});
     }
 
     /*-----------------------------------------------------*\
     | Write grouped HID device rules                        |
     \*-----------------------------------------------------*/
-    for(const std::pair<const std::string, std::vector<std::pair<uint16_t, uint16_t>>>& group : detector_groups)
+    for(const std::pair<const std::string, std::vector<std::pair<int, int>>>& group : detector_groups)
     {
         fprintf(output_file, "#---------------------------------------------------------------#\n");
         fprintf(output_file, "#  %s\n", group.first.c_str());
@@ -2289,9 +2362,21 @@ bool DetectionManager::WriteUdevRules(FILE* output_file)
 
         std::string device_name_tag = UdevDeviceNameToTag(group.first);
 
-        for(const std::pair<uint16_t, uint16_t>& vid_pid : group.second)
+        for(const std::pair<int, int>& vid_pid : group.second)
         {
-            fprintf(output_file, "SUBSYSTEMS==\"usb|hidraw\", ATTRS{idVendor}==\"%04x\", ATTRS{idProduct}==\"%04x\", TAG+=\"uaccess\", TAG+=\"%s\"\n", vid_pid.first, vid_pid.second, device_name_tag.c_str());
+            fprintf(output_file, "SUBSYSTEMS==\"usb|hidraw\", ");
+
+            if(vid_pid.first >= 0)
+            {
+                fprintf(output_file, "ATTRS{idVendor}==\"%04x\", ", vid_pid.first);
+            }
+
+            if(vid_pid.second >= 0)
+            {
+                fprintf(output_file, "ATTRS{idProduct}==\"%04x\", ", vid_pid.second);
+            }
+
+            fprintf(output_file, "TAG+=\"uaccess\", TAG+=\"%s\"\n", device_name_tag.c_str());
         }
         fprintf(output_file, "\n");
     }
