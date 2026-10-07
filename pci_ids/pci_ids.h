@@ -461,6 +461,7 @@
 #define COLORFUL_IGAME_RTX_5070_ULTRAW_OCV                      0x1500
 #define COLORFUL_IGAME_RTX_5070_ULTRAW_OCV2                     0x1501
 #define COLORFUL_IGAME_RTX_5070TI_ULTRAW_OC                     0x1500
+#define COLORFUL_IGAME_RTX_5080_ULTRAW_OC                       0x1501
 
 /*-----------------------------------------------------*\
 | EVGA Sub-Device IDs                                   |
@@ -723,6 +724,7 @@
 #define GIGABYTE_RTX4070TIS_EAGLE_OC_16G_SUB_DEV                0x413E
 #define GIGABYTE_RTX4070TIS_AERO_OC_16G_SUB_DEV                 0x413F
 #define GIGABYTE_RTX4070TIS_GAMING_OC_16G_SUB_DEV               0x413C
+#define GIGABYTE_RTX4070TIS_AORUS_MASTER_16G_SUB_DEV            0x4136
 #define GIGABYTE_RTX4080_AERO_OC_SUB_DEV                        0x40C5
 #define GIGABYTE_RTX4080_EAGLE_OC_SUB_DEV                       0x40BE
 #define GIGABYTE_RTX4080_GAMING_OC_SUB_DEV                      0x40BC
@@ -760,6 +762,7 @@
 #define GIGABYTE_RX6700XT_GAMING_OC_12G_SUB_DEV                 0x232D
 #define GIGABYTE_RX6700XT_EAGLE_12G_SUB_DEV                     0x2331
 #define GIGABYTE_AORUS_RX_6750_XT_ELITE_12G_SUB_DEV             0x2407
+#define GIGABYTE_RX6750XT_GAMING_OC_12G_SUB_DEV                 0x2408
 #define GIGABYTE_RX6800XT_GAMING_OC_SUB_DEV                     0x2328
 #define GIGABYTE_RX6900XT_XTREME_WATERFORCE_WB_SUB_DEV          0x2333
 #define GIGABYTE_AORUS_RX6900XT_MASTER_SUB_DEV                  0x2332
