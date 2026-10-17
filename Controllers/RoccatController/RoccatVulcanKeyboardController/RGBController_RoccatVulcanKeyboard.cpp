@@ -134,6 +134,7 @@ void RGBController_RoccatVulcanKeyboard::SetupZones()
             break;
         case TURTLE_BEACH_VULCAN_II_MAX_PID:
             keyboard_ptr = &RoccatVulcanIIMaxLayouts;
+            break;
         case ROCCAT_VULCAN_II_MINI_PID:
             keyboard_ptr = &RoccatVulcanIIMiniLayouts;
             break;
